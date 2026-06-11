@@ -76,20 +76,12 @@ public class ModItems {
             int upgradeLevel = stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
 
             if (Screen.hasShiftDown()) {
-                // 9格槽位 × 每格1模块 = 最大9级（天然上限）
-                // 9 slots × 1 mold each = max 9 (natural cap)
-                int maxUpgradeLevel = 9;
                 int currentStep = upgradeLevel;
-                int maxStep = maxUpgradeLevel;
 
-                // 每行独立组件，避免 \n 和 § 渲染问题
-                // separate components per line to avoid \n and § rendering issues
                 tooltip.add(Component.translatable("tooltip.stairway_heaven.details.level",
-                        upgradeLevel, maxUpgradeLevel));
+                        upgradeLevel, 9));
                 tooltip.add(Component.translatable("tooltip.stairway_heaven.details.step",
                         currentStep));
-                tooltip.add(Component.translatable("tooltip.stairway_heaven.details.max",
-                        maxStep));
             } else {
                 tooltip.add(Component.translatable("tooltip.stairway_heaven.hold_shift"));
             }

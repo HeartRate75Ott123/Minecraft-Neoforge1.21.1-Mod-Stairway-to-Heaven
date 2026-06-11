@@ -12,6 +12,5 @@
   "tooltip.stairway_heaven.locked_slot": "Requires Level %d to Unlock",
   "tooltip.stairway_heaven.hold_shift": "Hold Shift for Details",
   "tooltip.stairway_heaven.details.level": "Upgrade Level: %d / %d",
-  "tooltip.stairway_heaven.details.step": "Step Height: %d blocks",
-  "tooltip.stairway_heaven.details.max": "Max Step: %d blocks"
+  "tooltip.stairway_heaven.details.step": "Step Height: %d blocks"
 }
