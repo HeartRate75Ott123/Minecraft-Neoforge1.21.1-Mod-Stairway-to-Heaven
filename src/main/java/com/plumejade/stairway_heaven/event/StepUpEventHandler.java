@@ -154,20 +154,23 @@ public final class StepUpEventHandler {
     // ────────────────────────────────────────────────────────────
 
     /**
-     * 扫描玩家背包，找到天堂之靴并返回其升级等级。
-     * Scan player inventory for Heaven Boots, return upgrade level.
+     * 扫描玩家背包中所有天堂之靴，返回最高升级等级（自动选最优）。
+     * Scan all Heaven Boots in inventory, return the highest upgrade level.
      */
     static int findHeavenBootsLevel(Player player) {
+        int maxLevel = 0;
         for (ItemStack stack : player.getInventory().items) {
             if (!stack.isEmpty() && stack.getItem() instanceof ModItems.HeavenBootsItem) {
-                return stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
+                int level = stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
+                if (level > maxLevel) maxLevel = level;
             }
         }
         ItemStack offhand = player.getOffhandItem();
         if (!offhand.isEmpty() && offhand.getItem() instanceof ModItems.HeavenBootsItem) {
-            return offhand.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
+            int level = offhand.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
+            if (level > maxLevel) maxLevel = level;
         }
-        return 0;
+        return maxLevel;
     }
 
     /**
