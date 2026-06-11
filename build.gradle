@@ -27,6 +27,10 @@ sourceSets.main.resources {
 }
 
 repositories {
+    maven {
+        name = "Illusive Soulworks"
+        url = "https://maven.theillusivec4.top/"
+    }
 }
 
 base {
@@ -116,6 +120,8 @@ configurations {
 }
 
 dependencies {
+    // Curios API — 可选兼容 / optional compatibility
+    compileOnly "top.theillusivec4.curios:curios-neoforge:9.5.0+1.21.1"
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

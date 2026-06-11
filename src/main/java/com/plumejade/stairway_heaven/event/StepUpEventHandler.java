@@ -154,8 +154,8 @@ public final class StepUpEventHandler {
     // ────────────────────────────────────────────────────────────
 
     /**
-     * 扫描玩家背包中所有天堂之靴，返回最高升级等级（自动选最优）。
-     * Scan all Heaven Boots in inventory, return the highest upgrade level.
+     * 扫描玩家背包中所有天堂之靴（含 Curios 足部饰品槽），返回最高升级等级。
+     * Scan all Heaven Boots (incl. Curios feet slots), return highest upgrade level.
      */
     static int findHeavenBootsLevel(Player player) {
         int maxLevel = 0;
@@ -170,7 +170,33 @@ public final class StepUpEventHandler {
             int level = offhand.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
             if (level > maxLevel) maxLevel = level;
         }
+        // Curios 足部饰品槽 / Curios feet slot
+        int curiosLevel = findBootsInCurios(player);
+        if (curiosLevel > maxLevel) maxLevel = curiosLevel;
         return maxLevel;
+    }
+
+    /** 从 Curios 足部槽位查找天堂之靴 / Find Heaven Boots in Curios feet slot */
+    private static int findBootsInCurios(Player player) {
+        try {
+            return top.theillusivec4.curios.api.CuriosApi.getCuriosInventory(player)
+                    .map(handler -> {
+                        int max = 0;
+                        var slots = handler.getCurios().get("feet");
+                        if (slots != null) {
+                            for (int i = 0; i < slots.getSlots(); i++) {
+                                ItemStack stack = slots.getStacks().getStackInSlot(i);
+                                if (!stack.isEmpty() && stack.getItem() instanceof ModItems.HeavenBootsItem) {
+                                    int level = stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
+                                    if (level > max) max = level;
+                                }
+                            }
+                        }
+                        return max;
+                    }).orElse(0);
+        } catch (NoClassDefFoundError e) {
+            return 0; // Curios 未安装 / Curios not installed
+        }
     }
 
     /**

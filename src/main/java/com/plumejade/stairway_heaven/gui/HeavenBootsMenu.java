@@ -177,19 +177,37 @@ public class HeavenBootsMenu extends AbstractContainerMenu {
         boots.set(ModDataComponents.UPGRADE_LEVEL.get(), newLevel);
     }
 
-    /** Find the heaven boots stack in the player's inventory. */
+    /** 在玩家背包和 Curios 足部槽位中查找天堂之靴 / Find Heaven Boots in inventory + Curios */
     private ItemStack getBoots() {
-        // Try the original slot first
+        // Try the original slot first / 优先查原槽位
         ItemStack stack = playerInventory.getItem(bootSlot);
         if (stack.getItem() instanceof ModItems.HeavenBootsItem) {
             return stack;
         }
-        // Fallback: scan entire inventory
+        // Fallback: scan entire inventory / 扫描整个背包
         for (int i = 0; i < playerInventory.getContainerSize(); i++) {
             stack = playerInventory.getItem(i);
             if (stack.getItem() instanceof ModItems.HeavenBootsItem) {
                 return stack;
             }
+        }
+        // Check Curios feet slot / 检查 Curios 足部槽
+        try {
+            var opt = top.theillusivec4.curios.api.CuriosApi.getCuriosInventory(player);
+            if (opt.isPresent()) {
+                var handler = opt.get();
+                var slots = handler.getCurios().get("feet");
+                if (slots != null) {
+                    for (int i = 0; i < slots.getSlots(); i++) {
+                        ItemStack curiosStack = slots.getStacks().getStackInSlot(i);
+                        if (curiosStack.getItem() instanceof ModItems.HeavenBootsItem) {
+                            return curiosStack;
+                        }
+                    }
+                }
+            }
+        } catch (NoClassDefFoundError ignored) {
+            // Curios not installed / Curios 未安装
         }
         return ItemStack.EMPTY;
     }
