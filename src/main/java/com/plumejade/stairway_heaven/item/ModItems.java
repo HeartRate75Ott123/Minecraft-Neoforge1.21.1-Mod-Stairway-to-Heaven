@@ -76,12 +76,16 @@ public class ModItems {
             int upgradeLevel = stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
 
             if (Screen.hasShiftDown()) {
-                int currentStep = upgradeLevel;
+                // 读取玩家实际的步高属性值，保留一位小数
+                var player = Minecraft.getInstance().player;
+                double currentStep = player != null
+                        ? player.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.STEP_HEIGHT).getBaseValue()
+                        : (double) upgradeLevel;
 
                 tooltip.add(Component.translatable("tooltip.stairway_heaven.details.level",
                         upgradeLevel, 9));
                 tooltip.add(Component.translatable("tooltip.stairway_heaven.details.step",
-                        currentStep));
+                        String.format("%.1f", currentStep)));
             } else {
                 tooltip.add(Component.translatable("tooltip.stairway_heaven.hold_shift"));
             }

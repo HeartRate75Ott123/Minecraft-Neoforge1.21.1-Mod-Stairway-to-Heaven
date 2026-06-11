@@ -12,5 +12,5 @@
   "tooltip.stairway_heaven.locked_slot": "需要 %d 级经验解锁",
   "tooltip.stairway_heaven.hold_shift": "按住 Shift 查看详情",
   "tooltip.stairway_heaven.details.level": "升级等级: %d / %d",
-  "tooltip.stairway_heaven.details.step": "上坡高度: %d 格"
+  "tooltip.stairway_heaven.details.step": "上坡高度: %s 格"
 }
