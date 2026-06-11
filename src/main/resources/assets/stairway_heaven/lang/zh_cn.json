@@ -1,0 +1,16 @@
+{
+  "itemGroup.stairway_heaven": "天堂阶梯",
+
+  "item.stairway_heaven.heaven_boots": "天堂之靴",
+  "item.stairway_heaven.upgrade_mold": "升级模块",
+
+  "enchantment.stairway_heaven.auto_step": "自动上坡",
+
+  "container.stairway_heaven.heaven_boots": "天堂之靴升级",
+
+  "tooltip.stairway_heaven.locked_slot": "需要 %d 级经验解锁",
+  "tooltip.stairway_heaven.hold_shift": "按住 Shift 查看详情",
+  "tooltip.stairway_heaven.details.level": "升级等级: %d / %d",
+  "tooltip.stairway_heaven.details.step": "上坡高度: %d 格",
+  "tooltip.stairway_heaven.details.max": "最大步高: %d 格"
+}

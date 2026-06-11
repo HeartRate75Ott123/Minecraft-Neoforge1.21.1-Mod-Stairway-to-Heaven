@@ -1,0 +1,28 @@
+# Stairway to Heaven - NeoForge mod metadata
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="${mod_authors}"
+description='''
+把升级模块装入天堂之靴，经验解锁槽位，无需跳跃自动走上高墙——最高10格，附魔+1格。
+Fill Heaven Boots with Upgrade Molds, unlock slots via XP, and walk up walls without jumping — up to 10 blocks, +1 from enchantment.
+'''
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="[${neo_version},)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="BOTH"

@@ -1,0 +1,22 @@
+{
+  "description": {
+    "translate": "enchantment.stairway_heaven.auto_step",
+    "fallback": "Auto Step"
+  },
+  "supported_items": "#minecraft:foot_armor_enchantable",
+  "weight": 1,
+  "max_level": 1,
+  "min_cost": {
+    "base": 15,
+    "per_level_above_first": 12
+  },
+  "max_cost": {
+    "base": 35,
+    "per_level_above_first": 12
+  },
+  "anvil_cost": 4,
+  "slots": [
+    "feet"
+  ],
+  "effects": {}
+}
