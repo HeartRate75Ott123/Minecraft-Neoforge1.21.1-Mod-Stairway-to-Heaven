@@ -5,6 +5,7 @@
   "item.stairway_heaven.upgrade_mold": "升级模块",
 
   "enchantment.stairway_heaven.auto_step": "自动上坡",
+  "enchantment.stairway_heaven.auto_step.desc": "步高 +1，可自动走上一格方块。",
 
   "container.stairway_heaven.heaven_boots": "天堂之靴升级",
 
