@@ -20,10 +20,10 @@ Fill Heaven Boots with Upgrade Molds, unlock slots via XP, and walk up walls wit
 
 ## 合成 Recipes
 
-| 物品 | 配方 |
-|------|------|
+| 物品   | 配方              |
+| ---- | --------------- |
 | 天堂之靴 | 铁锭×8 围一圈，中间橡木木板 |
-| 升级模块 | 红石×8 围一圈，中间金锭 |
+| 升级模块 | 红石×8 围一圈，中间金锭   |
 
 ## 游戏截图
 

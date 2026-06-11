@@ -126,6 +126,17 @@ public class StairwayHeaven {
         }
         if (event.getTabKey() == CreativeModeTabs.INGREDIENTS) {
             event.accept(ModItems.UPGRADE_MOLD.get());
+            // 移除自动生成的自动爬坡附魔书 / remove auto-generated auto-step books
+            var toRemove = new java.util.ArrayList<ItemStack>();
+            for (var stack : event.getParentEntries()) {
+                if (stack.getItem() == Items.ENCHANTED_BOOK
+                        && stack.getEnchantments().keySet().stream()
+                                .anyMatch(h -> h.is(AUTO_STEP_KEY))) {
+                    toRemove.add(stack);
+                }
+            }
+            toRemove.forEach(stack ->
+                    event.remove(stack, CreativeModeTab.TabVisibility.PARENT_AND_SEARCH_TABS));
         }
     }
 }
