@@ -126,17 +126,31 @@ public class StairwayHeaven {
         }
         if (event.getTabKey() == CreativeModeTabs.INGREDIENTS) {
             event.accept(ModItems.UPGRADE_MOLD.get());
-            // 移除自动生成的自动爬坡附魔书 / remove auto-generated auto-step books
-            var toRemove = new java.util.ArrayList<ItemStack>();
-            for (var stack : event.getParentEntries()) {
-                if (stack.getItem() == Items.ENCHANTED_BOOK
-                        && stack.getEnchantments().keySet().stream()
-                                .anyMatch(h -> h.is(AUTO_STEP_KEY))) {
-                    toRemove.add(stack);
-                }
+            // 移除自动生成的自动爬坡附魔书（检查 parent 和 search 两个入口集）
+            // remove auto-generated auto-step books from both entry sets
+            removeAutoStepBooks(event);
+        }
+    }
+
+    /** 从选项卡条目中移除所有自动爬坡附魔书 / remove all auto-step books from tab entries */
+    private void removeAutoStepBooks(BuildCreativeModeTabContentsEvent event) {
+        // 构造一个匹配用的附魔书 / build a reference enchanted book for matching
+        var holder = event.getParameters().holders()
+                .lookupOrThrow(Registries.ENCHANTMENT)
+                .getOrThrow(AUTO_STEP_KEY);
+        ItemStack reference = new ItemStack(Items.ENCHANTED_BOOK);
+        reference.enchant(holder, 1);
+
+        // 同时检查 parent 和 search 条目 / check both parent and search entries
+        for (var stack : event.getParentEntries()) {
+            if (ItemStack.isSameItemSameComponents(stack, reference)) {
+                event.remove(stack, CreativeModeTab.TabVisibility.PARENT_AND_SEARCH_TABS);
             }
-            toRemove.forEach(stack ->
-                    event.remove(stack, CreativeModeTab.TabVisibility.PARENT_AND_SEARCH_TABS));
+        }
+        for (var stack : event.getSearchEntries()) {
+            if (ItemStack.isSameItemSameComponents(stack, reference)) {
+                event.remove(stack, CreativeModeTab.TabVisibility.PARENT_AND_SEARCH_TABS);
+            }
         }
     }
 }
