@@ -3,7 +3,7 @@
     "translate": "enchantment.stairway_heaven.auto_step",
     "fallback": "Auto Step"
   },
-  "supported_items": "#minecraft:foot_armor_enchantable",
+  "supported_items": "#minecraft:enchantable/foot_armor",
   "weight": 1,
   "max_level": 1,
   "min_cost": {
