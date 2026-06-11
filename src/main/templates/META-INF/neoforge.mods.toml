@@ -9,6 +9,7 @@ version="${mod_version}"
 displayName="${mod_name}"
 logoFile="logo.png"
 authors="${mod_authors}"
+displayURL="https://modrinth.com/mod/stairway-to-heaven"
 description='''
 把升级模块装入天堂之靴，经验解锁槽位，无需跳跃自动走上高墙——最高10格，附魔+1格。
 Fill Heaven Boots with Upgrade Molds, unlock slots via XP, and walk up walls without jumping — up to 10 blocks, +1 from enchantment.
