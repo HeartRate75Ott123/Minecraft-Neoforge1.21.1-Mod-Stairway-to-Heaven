@@ -79,8 +79,8 @@ public class ModItems {
                 // 9格槽位 × 每格1模块 = 最大9级（天然上限）
                 // 9 slots × 1 mold each = max 9 (natural cap)
                 int maxUpgradeLevel = 9;
-                int currentStep = 1 + upgradeLevel;
-                int maxStep = 1 + maxUpgradeLevel;
+                int currentStep = upgradeLevel;
+                int maxStep = maxUpgradeLevel;
 
                 // 每行独立组件，避免 \n 和 § 渲染问题
                 // separate components per line to avoid \n and § rendering issues

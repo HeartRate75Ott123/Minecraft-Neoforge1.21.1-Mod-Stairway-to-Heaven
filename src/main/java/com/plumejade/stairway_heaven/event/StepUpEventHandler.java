@@ -94,9 +94,9 @@ public final class StepUpEventHandler {
         int totalBonus = bootsLevel + enchantLevel;
 
         if (totalBonus > 0) {
-            // 9格9模块即天然上限，无需额外生命值限制
-            // 9 slots × 1 mold = natural cap of 9, no extra health limit needed
-            double target = 1.0 + totalBonus;
+            // 默认0.6只能上半砖，totalBonus直接作为目标步高
+            // vanilla 0.6 = slabs only; totalBonus as direct step height
+            double target = totalBonus;
 
             // 浮点精度比较，避免每 tick 无谓写入属性
             // float-precise compare to avoid useless attribute writes
