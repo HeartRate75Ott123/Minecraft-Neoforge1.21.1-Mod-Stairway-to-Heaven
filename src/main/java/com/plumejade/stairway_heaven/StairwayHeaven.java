@@ -17,6 +17,7 @@ import net.minecraft.world.item.Items;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.entity.living.LivingFallEvent;
@@ -78,8 +79,6 @@ public class StairwayHeaven {
                             .displayItems((parameters, output) -> {
                                 output.accept(ModItems.HEAVEN_BOOTS.get());
                                 output.accept(ModItems.UPGRADE_MOLD.get());
-                                // 附魔是 data-driven JSON，通过 RegistryKey 查询
-                                // enchantment is data-driven, lookup via RegistryKey
                                 var holder = parameters.holders()
                                         .lookupOrThrow(Registries.ENCHANTMENT)
                                         .getOrThrow(AUTO_STEP_KEY);
@@ -99,8 +98,22 @@ public class StairwayHeaven {
 
         modEventBus.addListener(this::addCreative);
 
-        // 注册 Game Bus 事件（非弃用方式 / non-deprecated approach）
-        // 使用 addListener 替代 @EventBusSubscriber(bus=GAME)
+        // 关键：在 FMLCommonSetupEvent 中注册 Game Bus 监听器，而非构造函数中直接注册。
+        // 这样能确保在所有 @EventBusSubscriber 静态注册完成之后再注册我们的监听器，
+        // 从而在与同样使用 LOWEST 优先级的其它模组（如 simple_enhancement）竞争时后执行。
+        //
+        // Key: register game bus listeners in FMLCommonSetupEvent (AFTER all
+        // @EventBusSubscriber static registrations). This ensures our LOWEST
+        // listeners fire AFTER other mods' LOWEST listeners, giving us the
+        // final word on step height.
+        modEventBus.addListener(this::commonSetup);
+    }
+
+    private void commonSetup(FMLCommonSetupEvent event) {
+        // 注册 Game Bus 事件 / register game bus events
+        // 这些监听器会在所有 @EventBusSubscriber 静态注册之后才注册到事件总线，
+        // 因此面对同样使用 LOWEST 优先级的模组（simple_enhancement）时，
+        // 我们的处理器将后执行，保证步高的最终覆盖权。
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.LOWEST, false,
                 PlayerTickEvent.Post.class,
@@ -109,7 +122,6 @@ public class StairwayHeaven {
                 EventPriority.HIGH, false,
                 LivingFallEvent.class,
                 StepUpEventHandler::onLivingFall);
-        // 死亡后恢复解锁数据 / restore unlock data after death
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.NORMAL, false,
                 PlayerEvent.Clone.class,
@@ -124,33 +136,7 @@ public class StairwayHeaven {
         if (event.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
             event.accept(ModItems.HEAVEN_BOOTS.get());
         }
-        if (event.getTabKey() == CreativeModeTabs.INGREDIENTS) {
-            event.accept(ModItems.UPGRADE_MOLD.get());
-            // 移除自动生成的自动爬坡附魔书（检查 parent 和 search 两个入口集）
-            // remove auto-generated auto-step books from both entry sets
-            removeAutoStepBooks(event);
-        }
-    }
-
-    /** 从选项卡条目中移除所有自动爬坡附魔书 / remove all auto-step books from tab entries */
-    private void removeAutoStepBooks(BuildCreativeModeTabContentsEvent event) {
-        // 构造一个匹配用的附魔书 / build a reference enchanted book for matching
-        var holder = event.getParameters().holders()
-                .lookupOrThrow(Registries.ENCHANTMENT)
-                .getOrThrow(AUTO_STEP_KEY);
-        ItemStack reference = new ItemStack(Items.ENCHANTED_BOOK);
-        reference.enchant(holder, 1);
-
-        // 同时检查 parent 和 search 条目 / check both parent and search entries
-        for (var stack : event.getParentEntries()) {
-            if (ItemStack.isSameItemSameComponents(stack, reference)) {
-                event.remove(stack, CreativeModeTab.TabVisibility.PARENT_AND_SEARCH_TABS);
-            }
-        }
-        for (var stack : event.getSearchEntries()) {
-            if (ItemStack.isSameItemSameComponents(stack, reference)) {
-                event.remove(stack, CreativeModeTab.TabVisibility.PARENT_AND_SEARCH_TABS);
-            }
-        }
+        // 升级模块不出现在原材料选项卡，只出现在模组专属选项卡
+        // Upgrade Mold only appears in the mod's creative tab, not in ingredients
     }
 }
