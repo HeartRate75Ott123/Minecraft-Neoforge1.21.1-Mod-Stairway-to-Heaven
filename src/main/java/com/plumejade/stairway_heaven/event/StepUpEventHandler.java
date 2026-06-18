@@ -66,48 +66,64 @@ public final class StepUpEventHandler {
     }
 
     // ────────────────────────────────────────────────────────────
-    //  每 tick 末尾：设置步高 / End of every tick: set step height
+    //  步高重置：正常优先级，供其他模组覆盖 / Step reset at NORMAL priority
     // ────────────────────────────────────────────────────────────
 
     /**
-     * 在每 tick 末尾（Post 阶段）、所有其他模组处理完毕之后，以最低优先级
-     * 设置玩家的步高属性。
+     * 在正常优先级重置步高为 0.6。不使用 LOWEST，以便其他模组（如 simple_enhancement）
+     * 可以在 LOWEST 覆盖这个重置值。
      * <p>
-     * At the very end of each tick (Post phase), after all other mods,
-     * set the player's step height attribute at lowest priority.
+     * Reset step height at NORMAL priority — allows other mods to
+     * override the reset at LOWEST if they want custom step height.
      */
-    public static void onPlayerTickPost(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
+    public static void onPlayerTickPostReset(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
         Player player = event.getEntity();
-
-        // 仅服务端处理 / server-side only
         if (player.level().isClientSide()) return;
         if (player.isSpectator()) return;
 
-        // ═══ 步高设置 / step height ═══
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        // 扫描背包获取 boots 升级等级 + 附魔等级
-        // scan inventory for boots upgrade level + enchantment level
         int bootsLevel = findHeavenBootsLevel(player);
         int enchantLevel = getAutoStepEnchantLevel(player);
         int totalBonus = bootsLevel + enchantLevel;
 
-        if (totalBonus > 0) {
-            // 默认0.6只能上半砖，totalBonus直接作为目标步高
-            // vanilla 0.6 = slabs only; totalBonus as direct step height
-            double target = totalBonus;
+        // 只有无加成时才重置 / only reset when no bonus
+        if (totalBonus <= 0 && Math.abs(stepAttr.getBaseValue() - VANILLA_STEP) > 0.001) {
+            stepAttr.setBaseValue(VANILLA_STEP);
+        }
+    }
 
-            // 浮点精度比较，避免每 tick 无谓写入属性
-            // float-precise compare to avoid useless attribute writes
+    // ────────────────────────────────────────────────────────────
+    //  步高锁定：最低优先级，压制其他模组 / Step override at LOWEST priority
+    // ────────────────────────────────────────────────────────────
+
+    /**
+     * 以最低优先级锁定步高为 boots+附魔的加成值，覆盖其他模组的修改。
+     * 仅在检测到加成时生效，无加成时不改写，留空给其他模组发挥。
+     * <p>
+     * Lock step height at LOWEST when boots/enchant detected.
+     * When no bonus, does nothing — gives other mods room to set
+     * their own step height (e.g. simple_enhancement giant mode).
+     */
+    public static void onPlayerTickPostLock(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
+        Player player = event.getEntity();
+        if (player.level().isClientSide()) return;
+        if (player.isSpectator()) return;
+
+        AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
+        if (stepAttr == null) return;
+
+        int bootsLevel = findHeavenBootsLevel(player);
+        int enchantLevel = getAutoStepEnchantLevel(player);
+        int totalBonus = bootsLevel + enchantLevel;
+
+        // 仅在有加成时覆盖，无加成时跳过（让重置或其他模组决定）
+        // only override when there's a bonus — leave it alone otherwise
+        if (totalBonus > 0) {
+            double target = totalBonus;
             if (Math.abs(stepAttr.getBaseValue() - target) > 0.001) {
                 stepAttr.setBaseValue(target);
-            }
-        } else {
-            // 无 boots 也无附魔 → 恢复原版
-            // no boots, no enchant → reset to vanilla
-            if (Math.abs(stepAttr.getBaseValue() - VANILLA_STEP) > 0.001) {
-                stepAttr.setBaseValue(VANILLA_STEP);
             }
         }
     }

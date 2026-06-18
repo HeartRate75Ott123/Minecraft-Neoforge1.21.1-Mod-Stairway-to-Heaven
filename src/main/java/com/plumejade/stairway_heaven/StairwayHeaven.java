@@ -114,10 +114,16 @@ public class StairwayHeaven {
         // 这些监听器会在所有 @EventBusSubscriber 静态注册之后才注册到事件总线，
         // 因此面对同样使用 LOWEST 优先级的模组（simple_enhancement）时，
         // 我们的处理器将后执行，保证步高的最终覆盖权。
+        //
+        // 策略：复位用 NORMAL（给别人覆盖机会），锁定用 LOWEST（确保生效）
+        NeoForge.EVENT_BUS.addListener(
+                EventPriority.NORMAL, false,
+                PlayerTickEvent.Post.class,
+                StepUpEventHandler::onPlayerTickPostReset);
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.LOWEST, false,
                 PlayerTickEvent.Post.class,
-                StepUpEventHandler::onPlayerTickPost);
+                StepUpEventHandler::onPlayerTickPostLock);
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.HIGH, false,
                 LivingFallEvent.class,
