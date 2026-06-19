@@ -111,23 +111,40 @@ public class StairwayHeaven {
 
     private void commonSetup(FMLCommonSetupEvent event) {
         // 注册 Game Bus 事件 / register game bus events
-        // 这些监听器会在所有 @EventBusSubscriber 静态注册之后才注册到事件总线，
-        // 因此面对同样使用 LOWEST 优先级的模组（simple_enhancement）时，
-        // 我们的处理器将后执行，保证步高的最终覆盖权。
         //
-        // 策略：复位用 NORMAL（给别人覆盖机会），锁定用 LOWEST（确保生效）
+        // 策略：事件驱动（即时响应）+ 低频安全网（每 10 tick 兜底）
+        // - 事件处理器：登录/切维度、换装备、重生时即时刷新步高
+        // - 安全网：保留 NORMAL+LOWEST 优先级拆分，确保与其他改步高模组兼容
+        //
+        // ── 事件驱动：即时刷新 / Event-driven: instant refresh ──
+        NeoForge.EVENT_BUS.addListener(
+                EventPriority.NORMAL, false,
+                net.neoforged.neoforge.event.entity.EntityJoinLevelEvent.class,
+                StepUpEventHandler::onPlayerJoinLevel);
+        NeoForge.EVENT_BUS.addListener(
+                EventPriority.NORMAL, false,
+                net.neoforged.neoforge.event.entity.living.LivingEquipmentChangeEvent.class,
+                StepUpEventHandler::onEquipmentChange);
+
+        // ── 安全网：低频扫描兜底 + 兼容其他模组 / Safety net + mod compat ──
+        // NORMAL: 无加成时复位，给其他模组（simple_enhancement）覆盖空间
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.NORMAL, false,
                 PlayerTickEvent.Post.class,
-                StepUpEventHandler::onPlayerTickPostReset);
+                StepUpEventHandler::onSafetyReset);
+        // LOWEST: 有加成时锁定，压制其他模组的修改
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.LOWEST, false,
                 PlayerTickEvent.Post.class,
-                StepUpEventHandler::onPlayerTickPostLock);
+                StepUpEventHandler::onSafetyLock);
+
+        // ── 摔落伤害减免 / Fall damage reduction ──
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.HIGH, false,
                 LivingFallEvent.class,
                 StepUpEventHandler::onLivingFall);
+
+        // ── 死亡重生 / Player respawn ──
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.NORMAL, false,
                 PlayerEvent.Clone.class,

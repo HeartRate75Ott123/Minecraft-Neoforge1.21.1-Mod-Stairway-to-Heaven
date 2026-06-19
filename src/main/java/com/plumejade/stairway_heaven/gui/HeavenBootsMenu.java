@@ -179,6 +179,9 @@ public class HeavenBootsMenu extends AbstractContainerMenu {
 
         boots.set(ModDataComponents.MOLD_INVENTORY.get(), ItemContainerContents.fromItems(items));
         boots.set(ModDataComponents.UPGRADE_LEVEL.get(), newLevel);
+
+        // 模具变化后即时刷新步高 / refresh step height immediately after mold change
+        StepUpEventHandler.refreshPlayer(player);
     }
 
     /** 在玩家背包和 Curios 足部槽位中查找天堂之靴 / Find Heaven Boots in inventory + Curios */

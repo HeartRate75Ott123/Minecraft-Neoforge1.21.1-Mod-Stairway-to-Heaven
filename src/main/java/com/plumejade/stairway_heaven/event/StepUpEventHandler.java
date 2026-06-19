@@ -23,19 +23,17 @@ import java.util.UUID;
  * 处理天堂之靴的自动上坡、摔落减免，以及自动上坡附魔效果。
  * Handles Heaven Boots auto-step, fall damage reduction, and auto-step enchantment.
  * <p>
- * <b>兼容策略 / Compatibility strategy:</b><br>
- * 不使用 Mixin，而是在 {@code PlayerTickEvent.Post} 阶段以 {@code EventPriority.LOWEST}
- * 优先级运行，在所有其他模组（如拔刀剑）处理完步高之后做最终覆盖。
- * No Mixin — runs at Post + LOWEST priority to override step height
- * after all other mods (e.g. SlashBlade) have finished their changes.
+ * <b>事件驱动 + 低频安全网 / Event-driven + low-frequency safety net:</b><br>
+ * — {@code EntityJoinLevelEvent}: 玩家切维度时即时刷新步高 / instant refresh on dimension change<br>
+ * — {@code LivingEquipmentChangeEvent}: 装备变化时即时刷新 / instant refresh on equipment change<br>
+ * — {@code PlayerEvent.Clone}: 重生后即时刷新 / instant refresh on respawn<br>
+ * — {@code HeavenBootsMenu.saveMoldsToBoots}: GUI 修改后即时刷新 / refresh after GUI changes<br>
+ * — 安全网 tick 每 10 tick 扫描一次背包兜底 / safety net scans every 10 ticks (2x/sec)<br>
+ * — {@code onLivingFall} 直接读缓存，不重复扫描 / fall handler reads shared cache<br>
  * <p>
- * <b>性能优化 / Performance:</b><br>
- * — 降频：每 5 tick 执行一次，减少 80% 触发频率 / throttled to every 5 ticks (80% reduction)<br>
- * — 双处理器间缓存：NORMAL 计算后 LOWEST 共享，避免同一 tick 重复扫描<br>
- *   cross-handler cache: NORMAL computes, LOWEST reuses — no duplicate scan per tick<br>
- * — {@code onLivingFall} 直接读缓存，不独立扫描 / fall handler reads shared cache<br>
- * — 浮点精确比较避免无谓写入 / float-precise compare avoids useless attribute writes<br>
- * — 提前退出条件放在最前面 / early-exit guards at the top
+ * <b>兼容策略 / Compatibility strategy:</b><br>
+ * 安全网保留 NORMAL+LOWEST 优先级拆分，让其他改步高的模组可以覆盖。
+ * Safety net keeps NORMAL+LOWEST split — other mods may override at LOWEST.
  */
 public final class StepUpEventHandler {
 
@@ -51,11 +49,12 @@ public final class StepUpEventHandler {
     public static final String UNLOCK_KEY = "stairway_heaven_unlocked";
     private static final int SLOTS = 9;
 
-    /** 降频间隔（tick）：每 N 个 tick 执行一次逻辑 / Throttle: process every Nth tick */
-    private static final int THROTTLE = 5;
+    /** 安全网降频间隔（tick）：每 N 个 tick 扫描一次背包兜底 / Safety net: scan every Nth tick */
+    private static final int SAFETY_THROTTLE = 10;
 
-    /** 双处理器间缓存：NORMAL 计算后 LOWEST 直接读取 / Tick-level bonus cache shared between handlers */
-    private static final Map<UUID, Integer> bonusCache = new HashMap<>();
+    /** 总加成等级缓存（public 供 HeavenBootsMenu 调用后刷新）/
+     *  Total bonus cache (populated by events & safety net, read by LivingFall) */
+    private static final Map<UUID, Integer> totalBonusCache = new HashMap<>();
 
     /** 附魔 Holder 懒缓存 / Lazy-cached enchantment holder */
     private static Holder<Enchantment> autoStepHolder = null;
@@ -65,81 +64,96 @@ public final class StepUpEventHandler {
 
     private StepUpEventHandler() { /* 工具类不可实例化 / utility class */ }
 
-    // ────────────────────────────────────────────────────────────
-    //  死亡后恢复解锁数据 / Restore unlock data after death
-    // ────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════
+    //  事件驱动 — 即时刷新 / Event-driven — instant refresh
+    // ════════════════════════════════════════════════════════════
 
     /**
-     * 玩家死亡重生后，将解锁槽位数据从旧玩家复制到新玩家。
-     * 避免死亡后所有槽位重新锁定。
-     * <p>
-     * Copy unlocked slot data from dead player to respawned player
-     * so slots don't re-lock after death.
+     * 玩家加入世界（登录/切维度）时即时刷新步高。
+     * Instant refresh when player joins a level (login / dimension change).
      */
-    public static void onPlayerClone(PlayerEvent.Clone event) {
-        if (!event.isWasDeath()) return;
-        var oldData = event.getOriginal().getPersistentData();
-        var newData = event.getEntity().getPersistentData();
-        if (oldData.contains(UNLOCK_KEY)) {
-            newData.put(UNLOCK_KEY, oldData.get(UNLOCK_KEY).copy());
-        }
+    public static void onPlayerJoinLevel(net.neoforged.neoforge.event.entity.EntityJoinLevelEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        refreshPlayer(player);
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  步高重置：正常优先级，供其他模组覆盖 / Step reset at NORMAL priority
-    // ────────────────────────────────────────────────────────────
+    /**
+     * 装备变化（盔甲/主手/副手）时即时刷新步高。
+     * Instant refresh on equipment change (armor, mainhand, offhand).
+     */
+    public static void onEquipmentChange(net.neoforged.neoforge.event.entity.living.LivingEquipmentChangeEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        if (player.level().isClientSide()) return;
+        refreshPlayer(player);
+    }
 
     /**
-     * 在正常优先级重置步高为 0.6。不使用 LOWEST，以便其他模组（如 simple_enhancement）
-     * 可以在 LOWEST 覆盖这个重置值。
+     * 从玩家背包、装备槽和 Curios 重新计算加成，并应用到步高属性。
+     * 公开方法，供 HeavenBootsMenu 在 GUI 修改模具后直接调用。
      * <p>
-     * Reset step height at NORMAL priority — allows other mods to
-     * override the reset at LOWEST if they want custom step height.
+     * Recompute bonus from inventory/equipment/Curios and apply to step height.
+     * Public — called by HeavenBootsMenu after mold changes in the GUI.
      */
-    public static void onPlayerTickPostReset(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
-        Player player = event.getEntity();
+    public static void refreshPlayer(Player player) {
         if (player.level().isClientSide()) return;
         if (player.isSpectator()) return;
-        // 降频：每 THROTTLE 个 tick 执行一次 / throttle: only process every THROTTLE ticks
-        if (player.tickCount % THROTTLE != 0) return;
 
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        int totalBonus = getTotalBonus(player);
+        int totalBonus = computeTotalBonus(player);
+        totalBonusCache.put(player.getUUID(), totalBonus);
 
-        // 只有无加成时才重置 / only reset when no bonus
+        double target = totalBonus > 0 ? (double) totalBonus : VANILLA_STEP;
+        if (Math.abs(stepAttr.getBaseValue() - target) > 0.001) {
+            stepAttr.setBaseValue(target);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  安全网 — 兜底扫描，保留优先级拆分供其他模组覆盖
+    //  Safety net — periodic scan, keeps NORMAL/LOWEST split for mod compat
+    // ════════════════════════════════════════════════════════════
+
+    /**
+     * NORMAL 优先级：无加成时复位步高至 0.6，给其他模组在 LOWEST 覆盖的空间。
+     * Reset step height at NORMAL priority — other mods may override at LOWEST.
+     */
+    public static void onSafetyReset(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
+        Player player = event.getEntity();
+        if (player.level().isClientSide()) return;
+        if (player.isSpectator()) return;
+        if (player.tickCount % SAFETY_THROTTLE != 0) return;
+
+        AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
+        if (stepAttr == null) return;
+
+        int totalBonus = computeTotalBonus(player);
+        totalBonusCache.put(player.getUUID(), totalBonus);
+
+        // 无加成才复位 / only reset when no bonus
         if (totalBonus <= 0 && Math.abs(stepAttr.getBaseValue() - VANILLA_STEP) > 0.001) {
             stepAttr.setBaseValue(VANILLA_STEP);
         }
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  步高锁定：最低优先级，压制其他模组 / Step override at LOWEST priority
-    // ────────────────────────────────────────────────────────────
-
     /**
-     * 以最低优先级锁定步高为 boots+附魔的加成值，覆盖其他模组的修改。
-     * 仅在检测到加成时生效，无加成时不改写，留空给其他模组发挥。
-     * <p>
-     * Lock step height at LOWEST when boots/enchant detected.
-     * When no bonus, does nothing — gives other mods room to set
-     * their own step height (e.g. simple_enhancement giant mode).
+     * LOWEST 优先级：有加成时锁定步高，压制其他模组的修改。
+     * Lock step height at LOWEST when bonus detected — final override.
      */
-    public static void onPlayerTickPostLock(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
+    public static void onSafetyLock(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
         Player player = event.getEntity();
         if (player.level().isClientSide()) return;
         if (player.isSpectator()) return;
-        // 降频：每 THROTTLE 个 tick 执行一次 / throttle: only process every THROTTLE ticks
-        if (player.tickCount % THROTTLE != 0) return;
+        if (player.tickCount % SAFETY_THROTTLE != 0) return;
 
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        int totalBonus = getTotalBonus(player);
+        // 直接读缓存（onSafetyReset 已在同一 tick 计算完毕）
+        // Read from cache — onSafetyReset (NORMAL) already computed this tick
+        int totalBonus = totalBonusCache.getOrDefault(player.getUUID(), 0);
 
-        // 仅在有加成时覆盖，无加成时跳过（让重置或其他模组决定）
-        // only override when there's a bonus — leave it alone otherwise
         if (totalBonus > 0) {
             double target = totalBonus;
             if (Math.abs(stepAttr.getBaseValue() - target) > 0.001) {
@@ -148,30 +162,21 @@ public final class StepUpEventHandler {
         }
     }
 
-    // ────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════
     //  摔落伤害减免 / Fall damage reduction
-    // ────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════
 
     /**
-     * 随 boots 升级等级提高安全摔落高度，超出部分按比例减免。
-     * 不是无条件免疫，等级越高保护越强（最高减免50%）。
+     * 从缓存读取加成值计算摔落减免，不重复扫描背包。
+     * 缓存由事件驱动 + 安全网共同刷新，始终保有最新值。
      * <p>
-     * <b>性能说明 / Performance note:</b><br>
-     * 直接使用 tick 级缓存 {@code bonusCache} 中的加成值，不再重复扫描背包。
-     * tick handler 每 5 tick 已自动刷新缓存，避免 {@code LivingFallEvent}
-     * 和 {@code PlayerTickEvent} 在同一 tick 内三次扫描背包。<br>
-     * Uses the tick-level {@code bonusCache} instead of re-scanning inventory —
-     * the cache is refreshed by tick handlers every 5 ticks, preventing triple
-     * inventory scans on the same tick.
-     * <p>
-     * Safe fall distance increases with upgrade level; excess damage
-     * is reduced proportionally (up to 50%). Not unconditional immunity.
+     * Reads bonus from cache (no inventory scan) — cache is kept current by
+     * event-driven refresh + safety net.
      */
     public static void onLivingFall(net.neoforged.neoforge.event.entity.living.LivingFallEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
 
-        // 使用 tick 级缓存避免重复扫描 / read from tick cache — no redundant scan
-        int totalBonus = bonusCache.getOrDefault(player.getUUID(), 0);
+        int totalBonus = totalBonusCache.getOrDefault(player.getUUID(), 0);
         if (totalBonus <= 0) return;
 
         // 安全高度从3格提升 / safe distance raised from vanilla 3
@@ -191,29 +196,36 @@ public final class StepUpEventHandler {
         }
     }
 
-    // ────────────────────────────────────────────────────────────
-    //  工具方法 / Helpers
-    // ────────────────────────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════
+    //  死亡后恢复解锁数据 + 刷新步高
+    //  Restore unlock data and refresh step height after death
+    // ════════════════════════════════════════════════════════════
 
     /**
-     * 获取当前玩家的总加成等级（靴子+附魔），带 tick 级缓存和降频。
-     * NORMAL 处理器首次调用时计算并缓存，LOWEST 处理器直接读取，
-     * 避免同一 tick 内重复扫描背包。
-     * <p>
-     * Get total bonus (boots + enchant) with tick-level caching.
-     * NORMAL handler computes & caches; LOWEST handler reads the cache,
-     * avoiding a redundant inventory scan within the same tick.
+     * 玩家死亡重生后，将解锁槽位数据从旧玩家复制到新玩家，
+     * 并重新计算步高。
      */
-    private static int getTotalBonus(Player player) {
-        int tickNow = player.tickCount;
-        // 刚到降频触发点 → 重新计算 / throttle tick → recompute
-        if (tickNow % THROTTLE == 0) {
-            int total = findHeavenBootsLevel(player) + getAutoStepEnchantLevel(player);
-            bonusCache.put(player.getUUID(), total);
-            return total;
+    public static void onPlayerClone(PlayerEvent.Clone event) {
+        if (!event.isWasDeath()) return;
+        var oldData = event.getOriginal().getPersistentData();
+        var newData = event.getEntity().getPersistentData();
+        if (oldData.contains(UNLOCK_KEY)) {
+            newData.put(UNLOCK_KEY, oldData.get(UNLOCK_KEY).copy());
         }
-        // 非降频 tick → 读缓存 / non-throttle tick → read cache
-        return bonusCache.getOrDefault(player.getUUID(), 0);
+
+        // 重生后即时刷新步高 / refresh step height on respawn
+        if (!event.getEntity().level().isClientSide()) {
+            refreshPlayer(event.getEntity());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  工具方法 / Helpers
+    // ════════════════════════════════════════════════════════════
+
+    /** 计算总加成 = 靴子最高等级 + 附魔等级 / boot level + enchant level */
+    private static int computeTotalBonus(Player player) {
+        return findHeavenBootsLevel(player) + getAutoStepEnchantLevel(player);
     }
 
     /**
@@ -228,7 +240,7 @@ public final class StepUpEventHandler {
             if (!stack.isEmpty() && stack.getItem() instanceof ModItems.HeavenBootsItem) {
                 int level = stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
                 if (level > maxLevel) maxLevel = level;
-                if (maxLevel >= SLOTS) return maxLevel; // 已达上限，提前退出 / already at cap
+                if (maxLevel >= SLOTS) return maxLevel;
             }
         }
 
@@ -257,8 +269,6 @@ public final class StepUpEventHandler {
 
     /** 从 Curios 足部槽位查找天堂之靴 / Find Heaven Boots in Curios feet slot */
     private static int findBootsInCurios(Player player) {
-        // 首次运行时一次性检测 Curios API 是否存在
-        // One-time check: detect Curios API availability at first run
         if (curiosAvailable == null) {
             try {
                 Class.forName("top.theillusivec4.curios.api.CuriosApi");
@@ -270,7 +280,6 @@ public final class StepUpEventHandler {
         if (!curiosAvailable) return 0;
 
         try {
-            // 此时 Curios 确认可用 / Curios is confirmed available
             return top.theillusivec4.curios.api.CuriosApi.getCuriosInventory(player)
                     .map(handler -> {
                         int max = 0;
@@ -287,7 +296,7 @@ public final class StepUpEventHandler {
                         return max;
                     }).orElse(0);
         } catch (NoClassDefFoundError e) {
-            curiosAvailable = false; // 运行时发现 Curios 不可用 / runtime — Curios unavailable
+            curiosAvailable = false;
             return 0;
         }
     }
@@ -299,8 +308,6 @@ public final class StepUpEventHandler {
     static int getAutoStepEnchantLevel(Player player) {
         ItemStack feet = player.getItemBySlot(EquipmentSlot.FEET);
         if (feet.isEmpty()) return 0;
-        // Holder 在游戏生命周期内不变，首次使用时懒加载
-        // Holder is stable for the game lifetime — lazy-init on first use
         if (autoStepHolder == null) {
             autoStepHolder = player.level().registryAccess()
                     .registryOrThrow(Registries.ENCHANTMENT)
