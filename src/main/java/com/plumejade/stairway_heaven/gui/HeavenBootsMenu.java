@@ -137,8 +137,12 @@ public class HeavenBootsMenu extends AbstractContainerMenu {
         ItemContainerContents contents = boots.getOrDefault(
                 ModDataComponents.MOLD_INVENTORY.get(), ItemContainerContents.EMPTY);
 
-        // Copy items into slot containers
-        var stacks = contents.stream().toList();
+        // Copy items into slot containers using traditional loop
+        int slotCount = contents.getSlots();
+        var stacks = new ArrayList<ItemStack>(SLOTS);
+        for (int slot = 0; slot < slotCount && slot < SLOTS; slot++) {
+            stacks.add(contents.getStackInSlot(slot));
+        }
         for (int i = 0; i < SLOTS && i < stacks.size(); i++) {
             ItemStack mold = stacks.get(i);
             if (!mold.isEmpty() && mold.getItem() == ModItems.UPGRADE_MOLD.get()) {
