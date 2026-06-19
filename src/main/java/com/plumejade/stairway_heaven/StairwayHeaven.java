@@ -112,9 +112,25 @@ public class StairwayHeaven {
     private void commonSetup(FMLCommonSetupEvent event) {
         // 注册 Game Bus 事件 / register game bus events
         //
-        // 策略：事件驱动（即时响应）+ 低频安全网（每 10 tick 兜底）
-        // - 事件处理器：登录/切维度、换装备、重生时即时刷新步高
-        // - 安全网：保留 NORMAL+LOWEST 优先级拆分，确保与其他改步高模组兼容
+        // 策略：Start LOWEST 主控 + Post LOWEST 兼容 + 事件驱动即时刷新
+        // - Start LOWEST（无节流）：每 tick 从缓存写回步高，移动引擎读到的是我们的值
+        // - Start NORMAL（每 5 tick）：低频安全网扫描背包 + 刷新缓存
+        // - Post LOWEST（每 2 tick）：兼容层，确保 other mods 在 Post 修改后被覆盖
+        // - 事件驱动：登录/切维度、换装备、重生时即时刷新
+        //
+        // ═══════════════════════════════════════════════════════════════
+        //  为什么这样设计可以兼容 simple_enhancement 且无延迟？
+        //
+        //  simple_enhancement 在 PlayerTickEvent.Post 修改步高属性。
+        //  旧方案仅用 Post，导致：Post 设值 → 下一 tick 移动引擎才读到 → 1 tick 延迟。
+        //
+        //  新方案：
+        //  1. Start LOWEST 每 tick 从缓存写回 → 移动引擎同一 tick 读到我们的值（无延迟）
+        //  2. Post LOWEST 每 2 tick 再写回 → simple_enhancement 的覆盖仅持续到当前 tick 结束
+        //  3. 下一 tick 的 Start LOWEST 再次写回 → 循环
+        //
+        //  结果：simple_enhancement 可以自由修改步高，但我们的值始终在移动引擎读取前生效。
+        // ═══════════════════════════════════════════════════════════════
         //
         // ── 事件驱动：即时刷新 / Event-driven: instant refresh ──
         NeoForge.EVENT_BUS.addListener(
@@ -126,17 +142,23 @@ public class StairwayHeaven {
                 net.neoforged.neoforge.event.entity.living.LivingEquipmentChangeEvent.class,
                 StepUpEventHandler::onEquipmentChange);
 
-        // ── 安全网：低频扫描兜底 + 兼容其他模组 / Safety net + mod compat ──
-        // NORMAL: 无加成时复位，给其他模组（simple_enhancement）覆盖空间
+        // ── 主控：每 tick Start LOWEST 从缓存写回步高 / Primary: apply cache before movement ──
+        NeoForge.EVENT_BUS.addListener(
+                EventPriority.LOWEST, false,
+                PlayerTickEvent.Pre.class,
+                StepUpEventHandler::onTickApply);
+
+        // ── 安全网扫描：每 5 tick 刷新缓存 / Safety scan: refresh cache ──
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.NORMAL, false,
-                PlayerTickEvent.Post.class,
-                StepUpEventHandler::onSafetyReset);
-        // LOWEST: 有加成时锁定，压制其他模组的修改
+                PlayerTickEvent.Pre.class,
+                StepUpEventHandler::onSafetyScan);
+
+        // ── 兼容层：Post LOWEST 安全网 / Compatibility: Post LOWEST safety net ──
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.LOWEST, false,
                 PlayerTickEvent.Post.class,
-                StepUpEventHandler::onSafetyLock);
+                StepUpEventHandler::onPostLock);
 
         // ── 摔落伤害减免 / Fall damage reduction ──
         NeoForge.EVENT_BUS.addListener(
