@@ -26,7 +26,7 @@ import java.util.UUID;
  * <b>事件驱动 + 即时修正 + 安全网 / Event-driven + instant correction + safety net:</b><br>
  * — {@code PlayerTickEvent.Pre LOWEST}（无节流）: 每 tick 从缓存读取加成并写回步高，
  *   确保移动引擎读取的是我们的值。不扫描背包，极轻量。<br>
- *   Reads bonus from cache every tick at Start LOWEST — ensures movement sees our value.
+ *   Reads bonus from cache every tick at Pre LOWEST — ensures movement sees our value.
  *   No inventory scan, extremely lightweight.<br>
  * — {@code PlayerTickEvent.Pre NORMAL}（每 5 tick）: 全量扫描背包更新缓存。<br>
  *   Full inventory scan every 5 ticks to refresh the cache.<br>
@@ -34,10 +34,12 @@ import java.util.UUID;
  * — {@code onLivingFall} 直接读缓存，不重复扫描 / fall handler reads shared cache.
  * <p>
  * <b>兼容策略 / Compatibility strategy:</b><br>
- * 所有修正均在 Start LOWEST 阶段完成（移动引擎读取属性之前），
- * 确保即使其他模组在其它阶段修改步高，也不影响上坡体验。
- * All corrections happen at Start LOWEST (before movement reads the attribute),
- * so other mods modifying step height at other event phases have no effect.
+ * Pre LOWEST 每 tick 写回我们的值（移动引擎读取属性之前），
+ * Post LOWEST 每 2 tick 安全网确保跨 tick 兼容性。
+ * 无天堂之靴加成的玩家完全不干预，让其他模组自由工作。<br>
+ * Pre LOWEST applies our value every tick (before movement reads the attribute).
+ * Post LOWEST safety net every 2 ticks ensures cross-tick compatibility.
+ * Players without Heaven Boots bonus are never touched — other mods work freely.
  */
 public final class StepUpEventHandler {
 
@@ -68,31 +70,36 @@ public final class StepUpEventHandler {
     private StepUpEventHandler() {}
 
     // ════════════════════════════════════════════════════════════
-    //  即时修正（无节流）：每 tick Start LOWEST 从缓存写回步高
-    //  Instant correction (unthrottled): applies cached bonus every tick at Start LOWEST
+    //  即时修正（无节流）：每 tick Pre LOWEST 从缓存写回步高
+    //  Instant correction (unthrottled): applies cached bonus every tick at Pre LOWEST
     // ════════════════════════════════════════════════════════════
 
     /**
-     * 每 tick 在 Start LOWEST 阶段从缓存读取加成值并写入步高属性，
+     * 每 tick 在 Pre LOWEST 阶段从缓存读取加成值并写入步高属性，
      * 确保移动引擎在该 tick 读取到的是我们的值。
      * 不扫描背包，仅一次 {@code HashMap.getOrDefault} + 一次条件 {@code setBaseValue}。
      * <p>
-     * Runs every tick at Start LOWEST — reads the cached bonus and sets step height
+     * <b>关键优化：</b>无天堂之靴加成的玩家完全跳过（{@code totalBonus <= 0}），
+     * 不干预步高属性，让 simple_enhancement 等模组自由工作。
+     * <p>
+     * Runs every tick at Pre LOWEST — reads the cached bonus and sets step height
      * BEFORE movement processing. No inventory scan, just a cache lookup + conditional set.
+     * <b>Key optimization:</b> players without Heaven Boots bonus are skipped entirely
+     * ({@code totalBonus <= 0}), leaving step height untouched for other mods.
      */
     public static void onTickApply(net.neoforged.neoforge.event.tick.PlayerTickEvent.Pre event) {
         Player player = event.getEntity();
         if (player.level().isClientSide()) return;
         if (player.isSpectator()) return;
 
+        int totalBonus = totalBonusCache.getOrDefault(player.getUUID(), 0);
+        if (totalBonus <= 0) return;
+
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        int totalBonus = totalBonusCache.getOrDefault(player.getUUID(), 0);
-        double target = totalBonus > 0 ? (double) totalBonus : VANILLA_STEP;
-
-        if (Math.abs(stepAttr.getBaseValue() - target) > 0.001) {
-            stepAttr.setBaseValue(target);
+        if (Math.abs(stepAttr.getBaseValue() - (double) totalBonus) > 0.001) {
+            stepAttr.setBaseValue((double) totalBonus);
         }
     }
 
@@ -103,12 +110,17 @@ public final class StepUpEventHandler {
 
     /**
      * 每 5 tick 全量扫描一次背包，更新缓存。NORMAL 优先级给其他模组覆盖空间。
-     * 但即使被覆盖，{@code onTickApply}（LOWEST）也会在同一 tick 的 Start
+     * 但即使被覆盖，{@code onTickApply}（LOWEST）也会在同一 tick 的 Pre
      * 阶段把我们缓存的值写回步高。
+     * <p>
+     * <b>优化：</b>无加成时清理缓存条目（{@code remove}），
+     * 避免 {@code onTickApply} 和 {@code onPostLock} 做无效查询。
      * <p>
      * Full scan every 5 ticks to refresh cache at NORMAL priority.
      * Even if overridden by other mods, {@code onTickApply} (LOWEST)
-     * re-applies our cached value in the same Start phase.
+     * re-applies our cached value in the same Pre phase.
+     * <b>Optimization:</b> remove cache entry when bonus is zero,
+     * so tick handlers skip this player entirely.
      */
     public static void onSafetyScan(net.neoforged.neoforge.event.tick.PlayerTickEvent.Pre event) {
         Player player = event.getEntity();
@@ -117,7 +129,11 @@ public final class StepUpEventHandler {
         if (player.tickCount % SAFETY_THROTTLE != 0) return;
 
         int totalBonus = computeTotalBonus(player);
-        totalBonusCache.put(player.getUUID(), totalBonus);
+        if (totalBonus > 0) {
+            totalBonusCache.put(player.getUUID(), totalBonus);
+        } else {
+            totalBonusCache.remove(player.getUUID());
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -128,13 +144,16 @@ public final class StepUpEventHandler {
     /**
      * Post LOWEST 安全网（每 2 tick）: 从缓存读取加成并重新写回步高。
      * 确保即使其他模组在 Post 阶段修改步高属性，我们的值也会在
-     * 当前 tick 结束时恢复。配合 {@code onTickApply} (Start LOWEST)
-     * 一起工作：Start 保证移动引擎读到我们的值，Post 保证跨 tick 兼容性。
+     * 当前 tick 结束时恢复。配合 {@code onTickApply} (Pre LOWEST)
+     * 一起工作：Pre 保证移动引擎读到我们的值，Post 保证跨 tick 兼容性。
+     * <p>
+     * <b>关键优化：</b>无天堂之靴加成的玩家完全跳过，不干预步高属性。
      * <p>
      * Safety net at Post LOWEST (every 2 ticks): re-applies cached step height
      * after other mods (e.g. simple_enhancement) may have modified it at Post.
-     * Works alongside {@code onTickApply} (Start LOWEST): Start ensures movement
+     * Works alongside {@code onTickApply} (Pre LOWEST): Pre ensures movement
      * sees our value; Post ensures cross-tick compatibility.
+     * <b>Key optimization:</b> players without bonus are skipped entirely.
      */
     public static void onPostLock(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
         Player player = event.getEntity();
@@ -142,14 +161,14 @@ public final class StepUpEventHandler {
         if (player.isSpectator()) return;
         if (player.tickCount % 2 != 0) return;
 
+        int totalBonus = totalBonusCache.getOrDefault(player.getUUID(), 0);
+        if (totalBonus <= 0) return;
+
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        int totalBonus = totalBonusCache.getOrDefault(player.getUUID(), 0);
-        double target = totalBonus > 0 ? (double) totalBonus : VANILLA_STEP;
-
-        if (Math.abs(stepAttr.getBaseValue() - target) > 0.001) {
-            stepAttr.setBaseValue(target);
+        if (Math.abs(stepAttr.getBaseValue() - (double) totalBonus) > 0.001) {
+            stepAttr.setBaseValue((double) totalBonus);
         }
     }
 
@@ -177,13 +196,18 @@ public final class StepUpEventHandler {
 
     /**
      * 公开方法：重新计算加成并刷新步高（供 HeavenBootsMenu GUI 调用）。
+     * 无加成时清理缓存条目，同时将步高复位至原版值。
      */
     public static void refreshPlayer(Player player) {
         if (player.level().isClientSide()) return;
         if (player.isSpectator()) return;
 
         int totalBonus = computeTotalBonus(player);
-        totalBonusCache.put(player.getUUID(), totalBonus);
+        if (totalBonus > 0) {
+            totalBonusCache.put(player.getUUID(), totalBonus);
+        } else {
+            totalBonusCache.remove(player.getUUID());
+        }
 
         // 主动写回步高，不必等 onTickApply 下个 tick 再处理
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
@@ -247,7 +271,8 @@ public final class StepUpEventHandler {
     static int findHeavenBootsLevel(Player player) {
         int maxLevel = 0;
 
-        for (ItemStack stack : player.getInventory().items) {
+        // 优先扫护甲槽（靴子最常在这里），可快速提前返回
+        for (ItemStack stack : player.getInventory().armor) {
             if (!stack.isEmpty() && stack.getItem() instanceof ModItems.HeavenBootsItem) {
                 int level = stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
                 if (level > maxLevel) maxLevel = level;
@@ -262,7 +287,7 @@ public final class StepUpEventHandler {
             if (maxLevel >= SLOTS) return maxLevel;
         }
 
-        for (ItemStack stack : player.getInventory().armor) {
+        for (ItemStack stack : player.getInventory().items) {
             if (!stack.isEmpty() && stack.getItem() instanceof ModItems.HeavenBootsItem) {
                 int level = stack.getOrDefault(ModDataComponents.UPGRADE_LEVEL.get(), 0);
                 if (level > maxLevel) maxLevel = level;

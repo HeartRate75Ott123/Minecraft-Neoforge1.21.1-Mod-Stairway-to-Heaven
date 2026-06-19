@@ -112,10 +112,11 @@ public class StairwayHeaven {
     private void commonSetup(FMLCommonSetupEvent event) {
         // 注册 Game Bus 事件 / register game bus events
         //
-        // 策略：Start LOWEST 主控 + Post LOWEST 兼容 + 事件驱动即时刷新
-        // - Start LOWEST（无节流）：每 tick 从缓存写回步高，移动引擎读到的是我们的值
-        // - Start NORMAL（每 5 tick）：低频安全网扫描背包 + 刷新缓存
+        // 策略：Pre LOWEST 主控 + Post LOWEST 兼容 + 事件驱动即时刷新
+        // - Pre LOWEST（无节流）：每 tick 从缓存写回步高，移动引擎读到的是我们的值
+        // - Pre NORMAL（每 5 tick）：低频安全网扫描背包 + 刷新缓存
         // - Post LOWEST（每 2 tick）：兼容层，确保 other mods 在 Post 修改后被覆盖
+        // - 无天堂之靴加成的玩家完全不干预，让 simple_enhancement 等模组自由工作
         // - 事件驱动：登录/切维度、换装备、重生时即时刷新
         //
         // ═══════════════════════════════════════════════════════════════
@@ -125,11 +126,11 @@ public class StairwayHeaven {
         //  旧方案仅用 Post，导致：Post 设值 → 下一 tick 移动引擎才读到 → 1 tick 延迟。
         //
         //  新方案：
-        //  1. Start LOWEST 每 tick 从缓存写回 → 移动引擎同一 tick 读到我们的值（无延迟）
+        //  1. Pre LOWEST 每 tick 从缓存写回 → 移动引擎同一 tick 读到我们的值（无延迟）
         //  2. Post LOWEST 每 2 tick 再写回 → simple_enhancement 的覆盖仅持续到当前 tick 结束
-        //  3. 下一 tick 的 Start LOWEST 再次写回 → 循环
+        //  3. 下一 tick 的 Pre LOWEST 再次写回 → 循环
         //
-        //  结果：simple_enhancement 可以自由修改步高，但我们的值始终在移动引擎读取前生效。
+        //  结果：simple_enhancement 可以自由修改步高，但玩家的值始终在移动引擎读取前生效。
         // ═══════════════════════════════════════════════════════════════
         //
         // ── 事件驱动：即时刷新 / Event-driven: instant refresh ──
@@ -142,7 +143,7 @@ public class StairwayHeaven {
                 net.neoforged.neoforge.event.entity.living.LivingEquipmentChangeEvent.class,
                 StepUpEventHandler::onEquipmentChange);
 
-        // ── 主控：每 tick Start LOWEST 从缓存写回步高 / Primary: apply cache before movement ──
+        // ── 主控：每 tick Pre LOWEST 从缓存写回步高 / Primary: apply cache before movement ──
         NeoForge.EVENT_BUS.addListener(
                 EventPriority.LOWEST, false,
                 PlayerTickEvent.Pre.class,
