@@ -4,11 +4,11 @@ import com.plumejade.stairway_heaven.component.ModDataComponents;
 import com.plumejade.stairway_heaven.item.ModItems;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.nbt.ByteArrayTag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -23,23 +23,22 @@ import java.util.UUID;
  * 处理天堂之靴的自动上坡、摔落减免，以及自动上坡附魔效果。
  * Handles Heaven Boots auto-step, fall damage reduction, and auto-step enchantment.
  * <p>
- * <b>事件驱动 + 即时修正 + 安全网 / Event-driven + instant correction + safety net:</b><br>
- * — {@code PlayerTickEvent.Pre LOWEST}（无节流）: 每 tick 从缓存读取加成并写回步高，
- *   确保移动引擎读取的是我们的值。不扫描背包，极轻量。<br>
- *   Reads bonus from cache every tick at Pre LOWEST — ensures movement sees our value.
- *   No inventory scan, extremely lightweight.<br>
- * — {@code PlayerTickEvent.Pre NORMAL}（每 5 tick）: 全量扫描背包更新缓存。<br>
- *   Full inventory scan every 5 ticks to refresh the cache.<br>
- * — 事件驱动即时刷新 / Event-driven instant refresh on equipment/join/clone/GUI changes.<br>
- * — {@code onLivingFall} 直接读缓存，不重复扫描 / fall handler reads shared cache.
+ * <b>修饰器方案 / Modifier-based approach:</b><br>
+ * 使用 {@code AttributeModifier.Operation.ADD_VALUE} 而非 {@code setBaseValue}，
+ * 修饰器与步高基底独立，simple_enhancement 等模组对基底的修改不受影响。<br>
+ * 无天堂之靴加成的玩家完全不干预，让其他模组自由工作。
  * <p>
- * <b>兼容策略 / Compatibility strategy:</b><br>
- * Pre LOWEST 每 tick 写回我们的值（移动引擎读取属性之前），
- * Post LOWEST 每 2 tick 安全网确保跨 tick 兼容性。
- * 无天堂之靴加成的玩家完全不干预，让其他模组自由工作。<br>
- * Pre LOWEST applies our value every tick (before movement reads the attribute).
- * Post LOWEST safety net every 2 ticks ensures cross-tick compatibility.
- * Players without Heaven Boots bonus are never touched — other mods work freely.
+ * <b>架构 / Architecture:</b><br>
+ * — {@code PlayerTickEvent.Pre LOWEST}（无节流）: 每 tick 确保修饰器生效（仅对有缓存玩家）<br>
+ * — {@code PlayerTickEvent.Pre NORMAL}（每 5 tick）: 扫描背包 + 更新缓存 + 同步修饰器<br>
+ * — {@code PlayerTickEvent.Post LOWEST}（每 2 tick）: 兼容安全网，重新应用修饰器<br>
+ * — 事件驱动 / Event-driven: join/equip/clone/GUI 即时刷新<br>
+ * — {@code onLivingFall} 直接读缓存，不重复扫描
+ * <p>
+ * <b>兼容策略 / Compatibility:</b><br>
+ * Uses ADD_VALUE modifier instead of setBaseValue — other mods modifying the base
+ * (e.g. simple_enhancement giant potion) coexist with our bonus.
+ * Players without Heaven Boots bonus are never touched.
  */
 public final class StepUpEventHandler {
 
@@ -54,6 +53,10 @@ public final class StepUpEventHandler {
     /** 解锁数据持久键 (public for HeavenBootsMenu) */
     public static final String UNLOCK_KEY = "stairway_heaven_unlocked";
     private static final int SLOTS = 9;
+
+    /** 属性修饰器 ID（ResourceLocation 方式，兼容 1.21 属性系统） */
+    private static final ResourceLocation STEP_BONUS_ID =
+            ResourceLocation.fromNamespaceAndPath("stairway_heaven", "step_height_bonus");
 
     /** 安全网扫描间隔 (tick) / Safety scan interval */
     private static final int SAFETY_THROTTLE = 5;
@@ -70,22 +73,21 @@ public final class StepUpEventHandler {
     private StepUpEventHandler() {}
 
     // ════════════════════════════════════════════════════════════
-    //  即时修正（无节流）：每 tick Pre LOWEST 从缓存写回步高
-    //  Instant correction (unthrottled): applies cached bonus every tick at Pre LOWEST
+    //  即时修正（无节流）：每 tick Pre LOWEST 确保修饰器生效
+    //  Instant correction (unthrottled): ensures modifier is active every tick at Pre LOWEST
     // ════════════════════════════════════════════════════════════
 
     /**
-     * 每 tick 在 Pre LOWEST 阶段从缓存读取加成值并写入步高属性，
-     * 确保移动引擎在该 tick 读取到的是我们的值。
-     * 不扫描背包，仅一次 {@code HashMap.getOrDefault} + 一次条件 {@code setBaseValue}。
+     * 每 tick 在 Pre LOWEST 阶段确保步高属性修饰器生效。
+     * 使用 {@code AttributeModifier.Operation.ADD_VALUE} 而非 {@code setBaseValue}，
+     * 这样 simple_enhancement 的巨人药剂等修改基底的效果不会被冲掉，
+     * 两者加成叠加共存。
      * <p>
-     * <b>关键优化：</b>无天堂之靴加成的玩家完全跳过（{@code totalBonus <= 0}），
-     * 不干预步高属性，让 simple_enhancement 等模组自由工作。
+     * 无天堂之靴加成的玩家完全跳过，不干预步高属性。
      * <p>
-     * Runs every tick at Pre LOWEST — reads the cached bonus and sets step height
-     * BEFORE movement processing. No inventory scan, just a cache lookup + conditional set.
-     * <b>Key optimization:</b> players without Heaven Boots bonus are skipped entirely
-     * ({@code totalBonus <= 0}), leaving step height untouched for other mods.
+     * Uses ADD_VALUE modifier instead of setBaseValue — allows other mods'
+     * base value changes (e.g. giant potion) to coexist with our bonus.
+     * Players without Heaven Boots bonus are skipped entirely.
      */
     public static void onTickApply(net.neoforged.neoforge.event.tick.PlayerTickEvent.Pre event) {
         Player player = event.getEntity();
@@ -98,9 +100,7 @@ public final class StepUpEventHandler {
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        if (Math.abs(stepAttr.getBaseValue() - (double) totalBonus) > 0.001) {
-            stepAttr.setBaseValue((double) totalBonus);
-        }
+        applyStepModifier(stepAttr, totalBonus);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -109,18 +109,14 @@ public final class StepUpEventHandler {
     // ════════════════════════════════════════════════════════════
 
     /**
-     * 每 5 tick 全量扫描一次背包，更新缓存。NORMAL 优先级给其他模组覆盖空间。
-     * 但即使被覆盖，{@code onTickApply}（LOWEST）也会在同一 tick 的 Pre
-     * 阶段把我们缓存的值写回步高。
+     * 每 5 tick 全量扫描背包 + 更新缓存 + 应用/移除修饰器。
+     * NORMAL 优先级，不影响其他模组的基底修改（simple_enhancement 巨人药剂等）。
      * <p>
-     * <b>优化：</b>无加成时清理缓存条目（{@code remove}），
-     * 避免 {@code onTickApply} 和 {@code onPostLock} 做无效查询。
+     * 无加成时清理缓存和修饰器，确保 {@code onTickApply} 和 {@code onPostLock}
+     * 不做无效查询。
      * <p>
-     * Full scan every 5 ticks to refresh cache at NORMAL priority.
-     * Even if overridden by other mods, {@code onTickApply} (LOWEST)
-     * re-applies our cached value in the same Pre phase.
-     * <b>Optimization:</b> remove cache entry when bonus is zero,
-     * so tick handlers skip this player entirely.
+     * Full scan every 5 ticks: refreshes cache, applies/removes modifier.
+     * Uses ADD_VALUE modifier so other mods' base changes are preserved.
      */
     public static void onSafetyScan(net.neoforged.neoforge.event.tick.PlayerTickEvent.Pre event) {
         Player player = event.getEntity();
@@ -129,11 +125,7 @@ public final class StepUpEventHandler {
         if (player.tickCount % SAFETY_THROTTLE != 0) return;
 
         int totalBonus = computeTotalBonus(player);
-        if (totalBonus > 0) {
-            totalBonusCache.put(player.getUUID(), totalBonus);
-        } else {
-            totalBonusCache.remove(player.getUUID());
-        }
+        updateCacheAndModifier(player, totalBonus);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -142,18 +134,15 @@ public final class StepUpEventHandler {
     // ════════════════════════════════════════════════════════════
 
     /**
-     * Post LOWEST 安全网（每 2 tick）: 从缓存读取加成并重新写回步高。
-     * 确保即使其他模组在 Post 阶段修改步高属性，我们的值也会在
-     * 当前 tick 结束时恢复。配合 {@code onTickApply} (Pre LOWEST)
-     * 一起工作：Pre 保证移动引擎读到我们的值，Post 保证跨 tick 兼容性。
+     * Post LOWEST 安全网（每 2 tick）: 使用修饰器而非 setBaseValue 确保兼容。
+     * 即使其他模组在 Post 修改基底（如 simple_enhancement 的巨人药剂），
+     * 我们的 ADD_VALUE 修饰器不受影响，两个加成共存。
      * <p>
-     * <b>关键优化：</b>无天堂之靴加成的玩家完全跳过，不干预步高属性。
+     * 无天堂之靴加成的玩家完全跳过。
      * <p>
-     * Safety net at Post LOWEST (every 2 ticks): re-applies cached step height
-     * after other mods (e.g. simple_enhancement) may have modified it at Post.
-     * Works alongside {@code onTickApply} (Pre LOWEST): Pre ensures movement
-     * sees our value; Post ensures cross-tick compatibility.
-     * <b>Key optimization:</b> players without bonus are skipped entirely.
+     * Safety net at Post LOWEST (every 2 ticks): uses ADD_VALUE modifier,
+     * so even if other mods change the base value at Post (e.g. giant potion),
+     * our modifier remains and both effects stack.
      */
     public static void onPostLock(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
         Player player = event.getEntity();
@@ -167,9 +156,7 @@ public final class StepUpEventHandler {
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        if (Math.abs(stepAttr.getBaseValue() - (double) totalBonus) > 0.001) {
-            stepAttr.setBaseValue((double) totalBonus);
-        }
+        applyStepModifier(stepAttr, totalBonus);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -196,26 +183,14 @@ public final class StepUpEventHandler {
 
     /**
      * 公开方法：重新计算加成并刷新步高（供 HeavenBootsMenu GUI 调用）。
-     * 无加成时清理缓存条目，同时将步高复位至原版值。
+     * 使用修饰器而非 setBaseValue，兼容其他模组的基底修改。
      */
     public static void refreshPlayer(Player player) {
         if (player.level().isClientSide()) return;
         if (player.isSpectator()) return;
 
         int totalBonus = computeTotalBonus(player);
-        if (totalBonus > 0) {
-            totalBonusCache.put(player.getUUID(), totalBonus);
-        } else {
-            totalBonusCache.remove(player.getUUID());
-        }
-
-        // 主动写回步高，不必等 onTickApply 下个 tick 再处理
-        AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
-        if (stepAttr == null) return;
-        double target = totalBonus > 0 ? (double) totalBonus : VANILLA_STEP;
-        if (Math.abs(stepAttr.getBaseValue() - target) > 0.001) {
-            stepAttr.setBaseValue(target);
-        }
+        updateCacheAndModifier(player, totalBonus);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -263,6 +238,45 @@ public final class StepUpEventHandler {
     // ════════════════════════════════════════════════════════════
     //  工具方法 / Helpers
     // ════════════════════════════════════════════════════════════
+
+    /**
+     * 核心方法：对步高属性应用/移除我们的 ADD_VALUE 修饰器。
+     * 与 {@code setBaseValue} 不同，修饰器与基底独立，
+     * simple_enhancement 的基底改动（如巨人药剂）不受影响，
+     * 两个加成叠加共存。
+     * <p>
+     * Core method: applies or removes our ADD_VALUE modifier on STEP_HEIGHT.
+     * Unlike setBaseValue, this modifier is independent from the base value,
+     * so other mods' base changes (e.g. giant potion) coexist with ours.
+     */
+    private static void applyStepModifier(AttributeInstance stepAttr, int totalBonus) {
+        if (totalBonus > 0) {
+            // 先移除旧修饰器防止叠加，再添加新修饰器
+            stepAttr.removeModifier(STEP_BONUS_ID);
+            stepAttr.addTransientModifier(
+                    new AttributeModifier(STEP_BONUS_ID, (double) totalBonus,
+                            AttributeModifier.Operation.ADD_VALUE));
+        } else {
+            stepAttr.removeModifier(STEP_BONUS_ID);
+        }
+    }
+
+    /**
+     * 更新缓存并同步修饰器：在事件处理器（安全网扫描/装备变更等）中调用。
+     * 缓存更新后立即应用/移除修饰器，不必等 onTickApply 下次 tick。
+     */
+    private static void updateCacheAndModifier(Player player, int totalBonus) {
+        if (totalBonus > 0) {
+            totalBonusCache.put(player.getUUID(), totalBonus);
+        } else {
+            totalBonusCache.remove(player.getUUID());
+        }
+
+        AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
+        if (stepAttr != null) {
+            applyStepModifier(stepAttr, totalBonus);
+        }
+    }
 
     private static int computeTotalBonus(Player player) {
         return findHeavenBootsLevel(player) + getAutoStepEnchantLevel(player);

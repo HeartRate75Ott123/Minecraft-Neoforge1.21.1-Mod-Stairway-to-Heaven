@@ -112,25 +112,30 @@ public class StairwayHeaven {
     private void commonSetup(FMLCommonSetupEvent event) {
         // 注册 Game Bus 事件 / register game bus events
         //
-        // 策略：Pre LOWEST 主控 + Post LOWEST 兼容 + 事件驱动即时刷新
-        // - Pre LOWEST（无节流）：每 tick 从缓存写回步高，移动引擎读到的是我们的值
-        // - Pre NORMAL（每 5 tick）：低频安全网扫描背包 + 刷新缓存
-        // - Post LOWEST（每 2 tick）：兼容层，确保 other mods 在 Post 修改后被覆盖
-        // - 无天堂之靴加成的玩家完全不干预，让 simple_enhancement 等模组自由工作
+        // 策略：ADD_VALUE 修饰器 + Pre 主控 + Post 兼容 + 事件驱动
+        // - 使用 AttributeModifier.Operation.ADD_VALUE 而非 setBaseValue，
+        //   修饰器与步高基底独立，其他模组（simple_enhancement 巨人药剂等）
+        //   对基底的修改与我们的加成叠加共存
+        // - Pre LOWEST（无节流）：每 tick 确保修饰器生效（仅对加成>0的玩家）
+        // - Pre NORMAL（每 5 tick）：安全网扫描背包 + 刷新缓存 + 同步修饰器
+        // - Post LOWEST（每 2 tick）：兼容层，重新应用修饰器
+        // - 无天堂之靴加成的玩家完全不干预，让 simple_enhancement 等自由工作
         // - 事件驱动：登录/切维度、换装备、重生时即时刷新
         //
         // ═══════════════════════════════════════════════════════════════
-        //  为什么这样设计可以兼容 simple_enhancement 且无延迟？
+        //  为什么用修饰器而不用 setBaseValue？
         //
-        //  simple_enhancement 在 PlayerTickEvent.Post 修改步高属性。
-        //  旧方案仅用 Post，导致：Post 设值 → 下一 tick 移动引擎才读到 → 1 tick 延迟。
+        //  simple_enhancement 在 PlayerTickEvent.Post 用 setBaseValue 修改步高
+        //  （原版基底 + 巨人药剂加成）。
+        //  旧方案：我们也用 setBaseValue → 互相覆盖 → 一方失效
         //
-        //  新方案：
-        //  1. Pre LOWEST 每 tick 从缓存写回 → 移动引擎同一 tick 读到我们的值（无延迟）
-        //  2. Post LOWEST 每 2 tick 再写回 → simple_enhancement 的覆盖仅持续到当前 tick 结束
-        //  3. 下一 tick 的 Pre LOWEST 再次写回 → 循环
+        //  新方案（修饰器）：
+        //  - simple_enhancement 设基底 = 0.6 + 药剂加成
+        //  - 我们的 ADD_VALUE 修饰器 = 天堂之靴升级等级
+        //  - 最终步高 = 基底 + 修饰器 = 0.6 + 药剂 + 靴子
+        //  - 两者互不干扰，完美共存
         //
-        //  结果：simple_enhancement 可以自由修改步高，但玩家的值始终在移动引擎读取前生效。
+        //  结果：simple_enhancement 的巨人药剂 + 天堂之靴同时生效，无需延迟。
         // ═══════════════════════════════════════════════════════════════
         //
         // ── 事件驱动：即时刷新 / Event-driven: instant refresh ──
