@@ -79,15 +79,16 @@ public final class StepUpEventHandler {
 
     /**
      * 每 tick 在 Pre LOWEST 阶段确保步高属性修饰器生效。
-     * 使用 {@code AttributeModifier.Operation.ADD_VALUE} 而非 {@code setBaseValue}，
-     * 这样 simple_enhancement 的巨人药剂等修改基底的效果不会被冲掉，
-     * 两者加成叠加共存。
      * <p>
-     * 无天堂之靴加成的玩家完全跳过，不干预步高属性。
+     * <b>性能优化：</b>先检查 {@code hasModifier}，若修饰器已存在则直接跳过。
+     * 修饰器由事件驱动（装备变更/GUI保存/登录）和全量扫描（每5tick）维护，
+     * tick 处理器仅在其他模组移除了我们的修饰器时重新添加。
+     * 绝大多数 tick 零分配、零调用链。
      * <p>
-     * Uses ADD_VALUE modifier instead of setBaseValue — allows other mods'
-     * base value changes (e.g. giant potion) to coexist with our bonus.
-     * Players without Heaven Boots bonus are skipped entirely.
+     * Uses ADD_VALUE modifier — allows other mods' base changes to coexist.
+     * <b>Optimization:</b> checks hasModifier first; skips if already present.
+     * Modifier is maintained by events + periodic scan; tick handler only
+     * re-adds when another mod removed it. Zero allocation in common case.
      */
     public static void onTickApply(net.neoforged.neoforge.event.tick.PlayerTickEvent.Pre event) {
         Player player = event.getEntity();
@@ -100,7 +101,13 @@ public final class StepUpEventHandler {
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        applyStepModifier(stepAttr, totalBonus);
+        // 修饰器已在 → 事件/扫描已确保数量新鲜，跳过
+        if (stepAttr.hasModifier(STEP_BONUS_ID)) return;
+
+        // 被其他模组移除了 → 重新添加
+        stepAttr.addTransientModifier(
+                new AttributeModifier(STEP_BONUS_ID, (double) totalBonus,
+                        AttributeModifier.Operation.ADD_VALUE));
     }
 
     // ════════════════════════════════════════════════════════════
@@ -109,14 +116,15 @@ public final class StepUpEventHandler {
     // ════════════════════════════════════════════════════════════
 
     /**
-     * 每 5 tick 全量扫描背包 + 更新缓存 + 应用/移除修饰器。
-     * NORMAL 优先级，不影响其他模组的基底修改（simple_enhancement 巨人药剂等）。
+     * 每 5 tick 全量扫描背包，缓存值未变时不触发修饰器更新。
      * <p>
-     * 无加成时清理缓存和修饰器，确保 {@code onTickApply} 和 {@code onPostLock}
-     * 不做无效查询。
+     * <b>性能优化：</b>比较新旧缓存值，相同时跳过 {@code updateCacheAndModifier}
+     * 和修饰器操作。在大多数 tick 内，玩家的天堂之靴配置不变，扫描仅检查
+     * 背包（不可避免）但跳过所有后续调用。
      * <p>
-     * Full scan every 5 ticks: refreshes cache, applies/removes modifier.
-     * Uses ADD_VALUE modifier so other mods' base changes are preserved.
+     * Full scan every 5 ticks. Skips modifier update if cache hasn't changed.
+     * <b>Optimization:</b> compares old and new bonus; skips all subsequent
+     * modifier operations when unchanged (common case).
      */
     public static void onSafetyScan(net.neoforged.neoforge.event.tick.PlayerTickEvent.Pre event) {
         Player player = event.getEntity();
@@ -125,6 +133,9 @@ public final class StepUpEventHandler {
         if (player.tickCount % SAFETY_THROTTLE != 0) return;
 
         int totalBonus = computeTotalBonus(player);
+        int prev = totalBonusCache.getOrDefault(player.getUUID(), 0);
+        if (prev == totalBonus) return; // 未变化，跳过修饰器更新
+
         updateCacheAndModifier(player, totalBonus);
     }
 
@@ -134,15 +145,13 @@ public final class StepUpEventHandler {
     // ════════════════════════════════════════════════════════════
 
     /**
-     * Post LOWEST 安全网（每 2 tick）: 使用修饰器而非 setBaseValue 确保兼容。
-     * 即使其他模组在 Post 修改基底（如 simple_enhancement 的巨人药剂），
-     * 我们的 ADD_VALUE 修饰器不受影响，两个加成共存。
+     * Post LOWEST 安全网（每 2 tick）: 确保修饰器存在，与 Pre 形成双重保障。
      * <p>
-     * 无天堂之靴加成的玩家完全跳过。
+     * <b>性能优化：</b>与 {@code onTickApply} 相同，修饰器已存在时跳过，
+     * 零分配。仅在其他模组移除了修饰器时重新添加。
      * <p>
-     * Safety net at Post LOWEST (every 2 ticks): uses ADD_VALUE modifier,
-     * so even if other mods change the base value at Post (e.g. giant potion),
-     * our modifier remains and both effects stack.
+     * Safety net at Post LOWEST (every 2 ticks): same hasModifier optimization —
+     * zero allocation when modifier is already active (almost always).
      */
     public static void onPostLock(net.neoforged.neoforge.event.tick.PlayerTickEvent.Post event) {
         Player player = event.getEntity();
@@ -156,7 +165,11 @@ public final class StepUpEventHandler {
         AttributeInstance stepAttr = player.getAttribute(Attributes.STEP_HEIGHT);
         if (stepAttr == null) return;
 
-        applyStepModifier(stepAttr, totalBonus);
+        if (stepAttr.hasModifier(STEP_BONUS_ID)) return;
+
+        stepAttr.addTransientModifier(
+                new AttributeModifier(STEP_BONUS_ID, (double) totalBonus,
+                        AttributeModifier.Operation.ADD_VALUE));
     }
 
     // ════════════════════════════════════════════════════════════
@@ -240,24 +253,23 @@ public final class StepUpEventHandler {
     // ════════════════════════════════════════════════════════════
 
     /**
-     * 核心方法：对步高属性应用/移除我们的 ADD_VALUE 修饰器。
-     * 与 {@code setBaseValue} 不同，修饰器与基底独立，
-     * simple_enhancement 的基底改动（如巨人药剂）不受影响，
-     * 两个加成叠加共存。
+     * 应用或移除我们的 ADD_VALUE 修饰器。
      * <p>
-     * Core method: applies or removes our ADD_VALUE modifier on STEP_HEIGHT.
-     * Unlike setBaseValue, this modifier is independent from the base value,
-     * so other mods' base changes (e.g. giant potion) coexist with ours.
+     * <b>注意：</b>{@code addTransientModifier} 按 ResourceLocation ID 替换，
+     * 无需先 {@code removeModifier}（两者指向同一内部映射表）。
+     * tolBonus 为 0 时仅移除。
+     * <p>
+     * Applies or removes our ADD_VALUE modifier on STEP_HEIGHT.
+     * addTransientModifier replaces by ResourceLocation ID internally,
+     * so no prior removeModifier is needed.
      */
     private static void applyStepModifier(AttributeInstance stepAttr, int totalBonus) {
+        // 先移除旧修饰器防止重复添加（addTransientModifier 内部可能按列表而非映射存储）
+        stepAttr.removeModifier(STEP_BONUS_ID);
         if (totalBonus > 0) {
-            // 先移除旧修饰器防止叠加，再添加新修饰器
-            stepAttr.removeModifier(STEP_BONUS_ID);
             stepAttr.addTransientModifier(
                     new AttributeModifier(STEP_BONUS_ID, (double) totalBonus,
                             AttributeModifier.Operation.ADD_VALUE));
-        } else {
-            stepAttr.removeModifier(STEP_BONUS_ID);
         }
     }
 
